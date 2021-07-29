@@ -23,6 +23,7 @@ class Stock(object):
         self.in_position = False
         self.positionSize = ""
         self.positionType = ""
+        self.boughtFor = 0
         self.livePrices = []
         self.percentageChanges = []
 
@@ -356,45 +357,67 @@ def on_message(ws, message):
     # need 30 min of candlestick data before executing
     if (len(CURRENT_STOCK.livePrices) < 30):
         return
-    print("## Now beginning trade strategy execution ##")
+    if (len(CURRENT_STOCK.livePrices) == 30):
+        print("## Now beginning trade strategy execution ##")
     # now we can execute trades based on our strategy, given we have enough data
     dw = durbinWatson(CURRENT_STOCK.percentageChanges)
     bb = bollingerBands(CURRENT_STOCK.livePrices, 2)
     mean = sma(CURRENT_STOCK.livePrices, 20)
     # if the market has slight negative or no serial correlation (non-trending)
     if (not CURRENT_STOCK.in_position) and (1.5 <= dw and dw < 2):
-        stopPercentage = 0.01
+        stopPercentage = 0.005
         tradeQty = "100"
         # if we close above the upper bollinger band
         if (closePrice > bb[1]):
             # then we want to short the stock, and buy back at the mean
             stop_price = str(closePrice + (closePrice * stopPercentage))
-            CURRENT_STOCK.create_oto_order("sell", "market", tradeQty, "gtc", stop_price)
-            print("## Trade Signaled: Shorted stock with OTO order ##")
+            CURRENT_STOCK.create_market_order("sell", "market", tradeQty, "gtc")
+            print("## Trade Signaled: Shorted stock with market order ##")
             # update quantity and position attributes
             CURRENT_STOCK.positionSize = tradeQty
             CURRENT_STOCK.in_position = True
             CURRENT_STOCK.positionType = "short"
+            CURRENT_STOCK.boughtFor = closePrice
         # if we close below the lower bollinger band
         elif (closePrice < bb[0]):
             # then we want to buy the stock, and sell back at the mean
             stop_price = str(closePrice - (closePrice * stopPercentage))
-            CURRENT_STOCK.create_oto_order("buy", "market", tradeQty, "gtc", stop_price)
-            print("## Trade Signaled: Longed stock with OTO order ##")
+            CURRENT_STOCK.create_market_order("buy", "market", tradeQty, "gtc")
+            print("## Trade Signaled: Longed stock with market order ##")
             # update quantity and position attributes
             CURRENT_STOCK.positionSize = tradeQty
             CURRENT_STOCK.in_position = True
             CURRENT_STOCK.positionType = "long"
+            CURRENT_STOCK.boughtFor = closePrice
     # if we are in a position, search for trade exit
     else:
         size = CURRENT_STOCK.positionSize
+        qty = int(size)
+        percentDiff = CURRENT_STOCK.boughtFor * 0.005
+        # stop losses
+        if (CURRENT_STOCK.positionType == "short") and ((closePrice - CURRENT_STOCK.boughtFor) > percentDiff):
+            CURRENT_STOCK.create_market_order("buy", "market", size, "gtc")
+            print("## Stop Loss Hit: Bought back stock for a loss ##")
+            CURRENT_STOCK.positionSize = ""
+            CURRENT_STOCK.in_position = False
+            CURRENT_STOCK.positionType = ""
+            CURRENT_STOCK.boughtFor = 0
+        elif (CURRENT_STOCK.positionType == "long") and ((CURRENT_STOCK.boughtFor - closePrice) > percentDiff):
+            CURRENT_STOCK.create_market_order("sell", "market", size, "gtc")
+            print("## Stop Loss Hit: Sold back stock for a loss ##")
+            CURRENT_STOCK.positionSize = ""
+            CURRENT_STOCK.in_position = False
+            CURRENT_STOCK.positionType = ""
+            CURRENT_STOCK.boughtFor = 0
+        # take profits
         # if we are in a short position, look to buy back
-        if (CURRENT_STOCK.positionType == "short") and (closePrice <= mean):
-            create_market_order("buy", "market", size, "gtc")
+        elif (CURRENT_STOCK.positionType == "short") and (closePrice <= mean):
+            CURRENT_STOCK.create_market_order("buy", "market", size, "gtc")
             print("## Exit Found: Bought back stock with market order ##")
             CURRENT_STOCK.positionSize = ""
             CURRENT_STOCK.in_position = False
             CURRENT_STOCK.positionType = ""
+            CURRENT_STOCK.boughtFor = 0
         # if we are in a long position, look to sell back
         elif (CURRENT_STOCK.positionType == "long") and (closePrice >= mean):
             create_market_order("sell", "market", size, "gtc")
@@ -402,6 +425,7 @@ def on_message(ws, message):
             CURRENT_STOCK.positionSize = ""
             CURRENT_STOCK.in_position = False
             CURRENT_STOCK.positionType = ""
+            CURRENT_STOCK.boughtFor = 0
     
 def on_close(ws):
     print("connection closed")
